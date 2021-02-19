@@ -53,7 +53,7 @@ Resources:
           -
             AllowedOrigins:
               - "*"
-            AllowedMethods:   # Q do we need to allow anymore permissions?
+            AllowedMethods:
               - POST
               - GET
             AllowedHeaders:
@@ -62,7 +62,7 @@ Resources:
               - ETag
               - x-amz-meta-name
 
-  EC2Role:    # Q Do all the Resources with IAM need dynamic Naming
+  EC2Role:
     Type: "AWS::IAM::Role"
     Properties:
       RoleName: 'Cheque-demo-ec2-role'
@@ -210,6 +210,6 @@ Outputs:
         Fn::Sub: "${AWS::StackName}-RecordingBucket"
   EndpointUrl:
     Description: The endpoint url to be used to test the demo
-    Value: !Join [ '', [ 'http://', !Ref EC2EIP,':5001/cheque-processing'] ]
+    Value: !Join [ '', [ 'http://', !Ref EC2EIP,':port_number/dummy_endpoint_url'] ]
     Export:
       Name: EndpointUrl
