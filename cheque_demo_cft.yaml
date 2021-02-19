@@ -1,0 +1,215 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This is a cft for aws marketplace deployment #cheque-processing stack
+Parameters:
+  S3BucketName:
+    Description: bucket where backend codes and packages are present
+    Type: String
+  TagValue:
+    Description: Tag value to be attached to resource names
+    Type: String
+  VPCID:
+    Type: "AWS::EC2::VPC::Id"
+    Description: VPC IDs
+  SubnetID: 
+    Description: Subnet ID
+    Type: "AWS::EC2::Subnet::Id"
+  CIDR: 
+    Description: CIDR to restrict access to application
+    Type: String
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-xxxxxxxxxxxxxxxxxxx #use the ami which the team creates
+    us-east-2:
+      AMI: ami-xxxxxxxxxxxxxxxxxxx #use the ami which the team creates
+    us-west-1:
+      AMI: ami-xxxxxxxxxxxxxxxxxxx #use the ami which the team creates
+    us-west-2:
+      AMI: ami-xxxxxxxxxxxxxxxxxxx #use the ami which the team creates
+    eu-west-1:
+      AMI: ami-xxxxxxxxxxxxxxxxxxx #use the ami which the team creates
+    sa-east-1:
+      AMI: ami-xxxxxxxxxxxxxxxxxxx #use the ami which the team creates
+    ap-southeast-1:
+      AMI: ami-xxxxxxxxxxxxxxxxxxx #use the ami which the team creates
+    ap-southeast-2:
+      AMI: ami-xxxxxxxxxxxxxxxxxxx #use the ami which the team creates
+    ap-northeast-1:
+      AMI: ami-xxxxxxxxxxxxxxxxxxx #use the ami which the team creates
+
+Resources:
+  BackendBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      AccessControl: Private
+      BucketName: !Ref S3BucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'AES256'
+      CorsConfiguration:
+        CorsRules:
+          -
+            AllowedOrigins:
+              - "*"
+            AllowedMethods:   # Q do we need to allow anymore permissions?
+              - POST
+              - GET
+            AllowedHeaders:
+              - "*"
+            ExposedHeaders:
+              - ETag
+              - x-amz-meta-name
+
+  EC2Role:    # Q Do all the Resources with IAM need dynamic Naming
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: 'Cheque-demo-ec2-role'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns: 
+        -  arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+                
+  EC2InstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    DependsOn:
+    - EC2Role
+    Properties:
+      InstanceProfileName: !Sub 'Cheque-demo-ec2-instance-profile'
+      Path: /
+      Roles:
+        - !Ref EC2Role
+        
+  CustomPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    DependsOn:
+    - EC2Role
+    Properties: 
+      Description: String
+      ManagedPolicyName: Cheque-demo-ec2-custom-policy
+      Path: /
+      Roles: 
+        - !Ref EC2Role
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        -
+          Sid: "AllowReadModelArtifactsfromS3"
+          Effect: "Allow"
+          Resource: !Sub "arn:aws:s3:::${S3BucketName}"
+          Action:
+           - "s3:GetObject"
+           - "s3:PutObject"
+           
+        -
+          Sid: "AllowComprehendAccess"
+          Effect: "Allow"
+          Resource: !Join [ '', [ 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/', !Ref EC2Instance] ]
+          Action:
+           - "comprehend:DetectEntities"
+
+        -
+          Sid: "AllowCreationofSGMEndpoint"
+          Effect: "Allow"
+          Resource: !Join [ '', [ 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/', !Ref EC2Instance] ]
+          Action:
+           - "sagemaker:InvokeEndpoint"
+           - "sagemaker:CreateEndpoint"
+           - "sagemaker:CreateEndpointConfig"
+           - "sagemaker:CreateModel"
+           - "iam:PassRole"
+           - "sagemaker:DeleteEndpoint"
+           - "sagemaker:DeleteEndpointConfig"
+           - "sagemaker:DeleteModel"
+           - "sagemaker:DescribeEndpoint"
+           - "sagemaker:DescribeEndpointConfig"
+        -
+          Sid: "AllowTextractAccess"
+          Effect: "Allow"
+          Resource:  !Join [ '', [ 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/', !Ref EC2Instance] ]
+          Action:
+           - "textract:AnalyzeDocument"
+        - 
+          Sid: "AllowCloudFormationDescribeStacks"
+          Effect: "Allow"
+          Resource: !Join [ '', [ 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/', !Ref EC2Instance] ]
+          Action:
+           - "cloudformation:DescribeStacks"
+
+
+  EC2SecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: allow connections from specified CIDR ranges
+      GroupName: !Sub "${TagValue}-security-group"
+      VpcId: !Ref VPCID
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: !Ref 'CIDR'
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+    - EC2SecurityGroup
+    - EC2InstanceProfile
+    Properties:
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      ImageId: 
+        Fn::FindInMap:
+        - RegionMap
+        - Ref: AWS::Region
+        - AMI
+      InstanceType: t2.medium
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          GroupSet: 
+          - !Ref EC2SecurityGroup
+          SubnetId: !Ref SubnetID
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          cd /home/ubuntu/cheque-textract
+          sudo python3 startup.py ${AWS::Region} ${AWS::StackName}
+          sudo pm2 start app.py --interpreter=python3 --name=“flask_app”
+      Tags:
+      - 
+        Key: "Name"
+        Value: !Sub "${TagValue}-instance"
+
+  EC2EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: 
+    - EC2Instance
+    Properties:
+      InstanceId: !Ref EC2Instance
+      Domain: vpc
+      Tags: 
+      - 
+        Key: "Name"
+        Value: !Sub "${TagValue}-elastic-ip"
+
+
+Outputs:
+  RecordingBucket:
+    Description: The name of bucket
+    Value: !Ref S3BucketName
+    Export:
+      Name: 
+        Fn::Sub: "${AWS::StackName}-RecordingBucket"
+  EndpointUrl:
+    Description: The endpoint url to be used to test the demo
+    Value: !Join [ '', [ 'http://', !Ref EC2EIP,':5001/cheque-processing'] ]
+    Export:
+      Name: EndpointUrl
